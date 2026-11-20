@@ -33,8 +33,7 @@ module.exports = async function (req, res) {
     if (!userRes.ok) return fail();
     const data = await userRes.json();
     const user = data.user || data;
-    const chars = (data.user && data.user.characters) || data.characters || user.characters || [];
-
+    const chars = user.character || user.characters || data.character || data.characters || [];
     const session = {
       u: String(user.username || '').slice(0, 40),
       c: chars.slice(0, 12).map(function (c) {
