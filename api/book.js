@@ -42,6 +42,17 @@ module.exports = async function (req, res) {
   try {
     const r = await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (!r.ok) throw new Error('discord ' + r.status);
+    try { // keep a copy for the status page (30 days); never blocks the booking
+      const U = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL, T = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (U && T && name !== '-') {
+        const id = require('crypto').randomBytes(6).toString('hex');
+        const rec = { id: id, name: name, car: car, jobs: jobs.slice(0, 400), status: 'Received', t: Date.now() };
+        const call = (cmd) => fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+        await call(['SET', 'cc_b_' + id, JSON.stringify(rec), 'EX', String(60 * 60 * 24 * 30)]);
+        await call(['LPUSH', 'cc_book_ids', id]);
+        await call(['LTRIM', 'cc_book_ids', 0, 199]);
+      }
+    } catch (e) {}
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {
     res.statusCode = 502;
