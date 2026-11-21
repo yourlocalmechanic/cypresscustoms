@@ -1,10 +1,11 @@
 // One serverless function for the small features, to stay under the Hobby plan limit (12 functions).
-// /api/x?m=promo | reviews | referral | bookings
+// /api/x?m=promo | reviews | referral | bookings | staff
 const handlers = {
   promo: require('./_promo'),
   reviews: require('./_reviews'),
   referral: require('./_referral'),
-  bookings: require('./_bookings')
+  bookings: require('./_bookings'),
+  staff: require('./_staff')
 };
 module.exports = function (req, res) {
   let m = req.query && req.query.m;
