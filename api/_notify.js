@@ -1,7 +1,8 @@
-// Small helper: posts a short message to the Discord channel (same webhook as the bookings).
+// Small helper: posts a short message to Discord.
+// Channel: DISCORD_ALERTS_WEBHOOK_URL if set (loyalty and booking-ready alerts), otherwise the booking channel (DISCORD_WEBHOOK_URL).
 // Never throws; if the webhook is not set it does nothing.
 module.exports = async function notify(title, text, color) {
-  const hook = process.env.DISCORD_WEBHOOK_URL;
+  const hook = process.env.DISCORD_ALERTS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL;
   if (!hook) return;
   try {
     await fetch(hook, {
