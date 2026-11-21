@@ -1,69 +1,61 @@
-// Booking status. Players see their own requests after logging in with GTA World.
-// Owner sees the latest requests and sets the status (Received / In progress / Ready / Done / Declined).
-// Requests are stored for 30 days: character name, vehicle, jobs, status. No phone number.
-const crypto = require('crypto');
-const { COOKIE, verify, parseCookies } = require('./_lib');
-const notify = require('./_notify');
-const URL_ = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-const IDS = 'cc_book_ids';
-const STATUS = ['Received', 'In progress', 'Ready', 'Done', 'Declined'];
+// Sends a booking request to a Discord channel through a webhook.
+// Needs the env var DISCORD_WEBHOOK_URL (Discord: channel settings -> Integrations -> Webhooks).
+// Nothing is stored. No IP address or other data is collected, only what the form contains.
+let last = 0;
 
-async function redis(cmd) {
-  const r = await fetch(URL_, { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
-  const d = await r.json();
-  if (d && d.error) throw new Error(d.error);
-  return d;
-}
-function same(a, b) {
-  const x = crypto.createHash('sha256').update(String(a)).digest();
-  const y = crypto.createHash('sha256').update(String(b)).digest();
-  return crypto.timingSafeEqual(x, y);
-}
-async function latest(n) {
-  const d = await redis(['LRANGE', IDS, 0, n - 1]);
-  const out = [];
-  for (const id of (d && d.result) || []) {
-    const g = await redis(['GET', 'cc_b_' + id]);
-    if (g && g.result) { try { out.push(JSON.parse(g.result)); } catch (e) {} }
-  }
-  return out;
+function clean(v, n) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, n) || '-';
 }
 
 module.exports = async function (req, res) {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Cache-Control', 'no-store');
-  const configured = !!(URL_ && TOKEN && process.env.ADMIN_KEY);
-  const send = (code, obj) => { res.statusCode = code; res.end(JSON.stringify(obj)); };
+  const hook = process.env.DISCORD_WEBHOOK_URL;
+  if (req.method !== 'POST') { res.statusCode = 405; res.end(JSON.stringify({ error: 'POST only' })); return; }
+  if (!hook) { res.statusCode = 503; res.end(JSON.stringify({ error: 'not set up' })); return; }
+  let b = req.body;
+  if (typeof b === 'string') { try { b = JSON.parse(b); } catch (e) { b = {}; } }
+  b = b || {};
+  if (b.website) { res.end(JSON.stringify({ ok: true })); return; } // spam trap
+  const now = Date.now();
+  if (now - last < 4000) { res.statusCode = 429; res.end(JSON.stringify({ error: 'slow down' })); return; }
+  last = now;
+  const name = clean(b.name, 60), phone = clean(b.phone, 30), car = clean(b.car, 80), time = clean(b.time, 20);
+  const jobs = String(b.jobs == null ? '' : b.jobs).replace(/\u0000/g, '').trim().slice(0, 900) || '-';
+  if (name === '-' && jobs === '-') { res.statusCode = 400; res.end(JSON.stringify({ error: 'empty' })); return; }
+  const payload = {
+    username: 'Cypress Customs Website',
+    allowed_mentions: { parse: [] },
+    embeds: [{
+      title: 'New booking request',
+      color: 0x1f6b44,
+      fields: [
+        { name: 'Character', value: name, inline: true },
+        { name: 'Phone', value: phone, inline: true },
+        { name: 'Best time', value: time, inline: true },
+        { name: 'Vehicle', value: car },
+        { name: 'Jobs', value: jobs }
+      ],
+      timestamp: new Date().toISOString()
+    }]
+  };
   try {
-    if (req.method !== 'POST') {
-      let s = null;
-      try { s = verify(parseCookies(req)[COOKIE]); } catch (e) {}
-      if (!(URL_ && TOKEN) || !s) return send(200, { loggedIn: !!s, configured: configured, bookings: [] });
-      const names = s.c.map(function (c) { return (c[0] + ' ' + c[1]).trim().toLowerCase(); }).filter(Boolean);
-      const mine = (await latest(100)).filter(function (x) { return names.indexOf(String(x.name).toLowerCase()) >= 0; });
-      return send(200, { loggedIn: true, configured: configured, bookings: mine.slice(0, 10) });
-    }
-    if (!configured) return send(503, { error: 'not set up' });
-    let b = req.body;
-    if (typeof b === 'string') { try { b = JSON.parse(b); } catch (e) { b = {}; } }
-    b = b || {};
-    if (!same(b.key || '', process.env.ADMIN_KEY)) return send(401, { error: 'wrong key' });
-    if (b.action === 'list') return send(200, { bookings: await latest(30), statuses: STATUS });
-    if (b.action === 'status') {
-      const id = String(b.id || '').replace(/[^a-f0-9]/g, '').slice(0, 20);
-      if (STATUS.indexOf(b.status) < 0) return send(400, { error: 'bad status' });
-      const g = await redis(['GET', 'cc_b_' + id]);
-      if (!g || !g.result) return send(404, { error: 'Booking not found (it may have expired)' });
-      const x = JSON.parse(g.result);
-      x.status = b.status;
-      await redis(['SET', 'cc_b_' + id, JSON.stringify(x), 'EX', String(60 * 60 * 24 * 30)]);
-      if (b.status === 'Ready') await notify('Booking ready', x.name + ': ' + x.car + ' is ready for pickup.', 0x1f6b44);
-      return send(200, { booking: x });
-    }
-    return send(400, { error: 'bad action' });
+    const r = await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.ok) throw new Error('discord ' + r.status);
+    try { // keep a copy for the status page (30 days); never blocks the booking
+      const U = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL, T = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (U && T && name !== '-') {
+        const id = require('crypto').randomBytes(6).toString('hex');
+        const rec = { id: id, name: name, car: car, jobs: jobs.slice(0, 400), status: 'Received', t: Date.now() };
+        const call = (cmd) => fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+        await call(['SET', 'cc_b_' + id, JSON.stringify(rec), 'EX', String(60 * 60 * 24 * 30)]);
+        await call(['LPUSH', 'cc_book_ids', id]);
+        await call(['LTRIM', 'cc_book_ids', 0, 199]);
+      }
+    } catch (e) {}
+    res.end(JSON.stringify({ ok: true }));
   } catch (e) {
-    if (req.method === 'POST') return send(500, { error: String(e && e.message || e) });
-    return send(200, { loggedIn: false, configured: configured, bookings: [] });
+    res.statusCode = 502;
+    res.end(JSON.stringify({ error: 'could not send' }));
   }
 };
