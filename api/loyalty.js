@@ -3,6 +3,7 @@
 // Stored in Redis: only the character name and the number of stamps.
 const crypto = require('crypto');
 const { COOKIE, verify, parseCookies } = require('./_lib');
+const notify = require('./_notify');
 
 const URL_ = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -35,6 +36,8 @@ async function getCard(name) {
 }
 async function setCard(name, n) {
   n = Math.min(GOAL, Math.max(0, n | 0));
+  const before = await getCard(name);
+  if (n >= GOAL && before < GOAL) await notify('Loyalty reward unlocked', name + ' has collected ' + GOAL + '/' + GOAL + ' stamps and can claim the reward.', 0x1f6b44);
   if (n === 0) await redis(['HDEL', HASH, fieldOf(name)]);
   else await redis(['HSET', HASH, fieldOf(name), JSON.stringify({ name: name, n: n })]);
   return n;
