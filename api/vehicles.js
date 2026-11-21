@@ -8,6 +8,7 @@ const URL_ = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const HASH = 'cc_veh';
 const LOY = 'cc_loyalty';
+const notify = require('./_notify');
 const GOAL = 30;
 const MAXJOBS = 200;
 
@@ -44,7 +45,9 @@ async function addStamp(owner) {
   const d = await redis(['HGET', LOY, f]);
   let n = 0;
   if (d && d.result) { try { n = JSON.parse(d.result).n | 0; } catch (e) {} }
+  const was = n;
   n = Math.min(GOAL, n + 1);
+  if (n >= GOAL && was < GOAL) await notify('Loyalty reward unlocked', owner + ' has collected ' + GOAL + '/' + GOAL + ' stamps and can claim the reward.', 0x1f6b44);
   await redis(['HSET', LOY, f, JSON.stringify({ name: owner, n: n })]);
   return n;
 }
