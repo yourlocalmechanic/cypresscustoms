@@ -55,7 +55,10 @@ module.exports = async function (req, res) {
       const amount = r.price * qty;
       const mode = process.env.FLEECA_MODE === '1' ? 1 : 0;
       const f = await H.fleeca('POST', '/payment', { amount: amount, mode: mode, description: ('Raffle: ' + r.prize + ' | ' + name + ' x' + qty).slice(0, 250) });
-      if (f.status !== 201 || !f.data || !f.data.payment_id || !f.data.payment_link) return send(502, { error: 'The bank did not accept the request' });
+      if (f.status !== 201 || !f.data || !f.data.payment_id || !f.data.payment_link) {
+        const why = f.status === 401 ? 'API key is missing or wrong (401)' : f.status === 422 ? 'bank says the data is invalid (422): ' + JSON.stringify(f.data && (f.data.errors || f.data.message) || '').slice(0, 160) : f.status === 429 ? 'too many requests, wait a minute (429)' : 'bank answered ' + f.status + ' ' + String(f.data && f.data.message || '').slice(0, 120);
+        return send(502, { error: 'The bank did not accept the request: ' + why });
+      }
       if (String(f.data.payment_link).indexOf('https://banking.gta.world/') !== 0) return send(502, { error: 'Unexpected payment link' });
       await H.redis(['SET', 'cc_pay_' + f.data.payment_id, JSON.stringify({ name: name, qty: qty, amount: amount, rid: r.id, credited: false }), 'EX', 2592000]);
       return send(200, { link: f.data.payment_link, amount: amount, sandbox: mode === 0 });
